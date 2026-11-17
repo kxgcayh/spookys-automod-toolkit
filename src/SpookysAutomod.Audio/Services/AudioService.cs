@@ -194,7 +194,7 @@ public class AudioService
             {
                 "Download xWMAEncode from Microsoft DirectX SDK",
                 "Place xWMAEncode.exe in the tools directory",
-                "xWMAEncode is Windows-only; no open-source encoder writes xWMA"
+                "xWMAEncode is Windows-only; ffmpeg's WMAv2 encoder does not produce playable xWMA"
             });
     }
 
