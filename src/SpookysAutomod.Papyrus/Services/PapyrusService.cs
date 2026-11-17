@@ -105,14 +105,21 @@ public class PapyrusService
                 {
                     return Result<HeaderSetupResult>.Fail(
                         "Could not auto-detect Skyrim installation",
-                        suggestions: new List<string>
-                        {
-                            "Provide the path manually: papyrus setup-headers --skyrim-path \"C:/...\"",
-                            "Common locations:",
-                            "  C:/Program Files (x86)/Steam/steamapps/common/Skyrim Special Edition",
-                            "  C:/Program Files/Steam/steamapps/common/Skyrim Special Edition",
-                            "  D:/SteamLibrary/steamapps/common/Skyrim Special Edition"
-                        });
+                        suggestions: OperatingSystem.IsWindows()
+                            ? new List<string>
+                            {
+                                "Provide the path manually: papyrus setup-headers --skyrim-path \"C:/...\"",
+                                "Common locations:",
+                                "  C:/Program Files (x86)/Steam/steamapps/common/Skyrim Special Edition",
+                                "  C:/Program Files/Steam/steamapps/common/Skyrim Special Edition",
+                                "  D:/SteamLibrary/steamapps/common/Skyrim Special Edition"
+                            }
+                            : new List<string>
+                            {
+                                "Auto-detection only knows Windows Steam folders; on macOS/Linux pass the game folder:",
+                                "  papyrus setup-headers --skyrim-path \"/path/to/Skyrim Special Edition\"",
+                                "It must contain Data/Scripts/Source (installed by the Creation Kit)"
+                            });
                 }
                 _logger.Info($"Auto-detected Skyrim at: {skyrimPath}");
             }

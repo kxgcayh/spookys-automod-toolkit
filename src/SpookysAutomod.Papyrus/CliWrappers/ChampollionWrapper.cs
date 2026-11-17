@@ -33,15 +33,28 @@ public class ChampollionWrapper : ICliWrapper
 
         if (Directory.Exists(toolDir))
         {
-            // Search for executable (may be in subfolder)
+            // Search for executable (may be in subfolder). Off Windows, never pick a Windows .exe.
             var found = Directory.GetFiles(toolDir, exeName, SearchOption.AllDirectories).FirstOrDefault()
                      ?? Directory.GetFiles(toolDir, "champollion*", SearchOption.AllDirectories)
-                         .FirstOrDefault(f => !f.EndsWith(".dll") && !f.EndsWith(".pdb"));
+                         .FirstOrDefault(f => !f.EndsWith(".dll") && !f.EndsWith(".pdb") &&
+                                              (OperatingSystem.IsWindows() ||
+                                               !f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)));
 
             if (found != null)
             {
                 _executablePath = found;
                 return found;
+            }
+        }
+
+        // macOS/Linux: a native build on PATH (Orvid's releases are Windows-only).
+        if (!OperatingSystem.IsWindows())
+        {
+            var onPath = ToolDownloader.FindOnPath("champollion", "Champollion");
+            if (onPath != null)
+            {
+                _executablePath = onPath;
+                return onPath;
             }
         }
 
@@ -72,6 +85,22 @@ public class ChampollionWrapper : ICliWrapper
 
     public async Task<Result> DownloadAsync()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Orvid/Champollion publishes a Windows build only; use a native build instead.
+            if (IsAvailable())
+                return Result.Ok($"Using native Champollion: {GetToolPath()}");
+
+            return Result.Fail(
+                "No Champollion build for this platform",
+                "Orvid/Champollion releases contain Windows binaries only",
+                new List<string>
+                {
+                    "Build Champollion from source (CMake) and put 'champollion' on PATH",
+                    "or place the binary at tools/champollion/champollion"
+                });
+        }
+
         // Champollion releases are on GitHub (single zip for all platforms)
         var result = await _downloader.DownloadFromGitHubAsync(
             "Orvid",
@@ -129,6 +158,16 @@ public class ChampollionWrapper : ICliWrapper
         // Find output file
         var scriptName = Path.GetFileNameWithoutExtension(pexPath) + ".psc";
         var outputPath = Path.Combine(outputDir, scriptName);
+
+        // Champollion exits 0 even when a file fails to decompile; the missing .psc is the signal.
+        if (!File.Exists(outputPath))
+        {
+            var output = result.Value ?? "";
+            return Result<DecompileResult>.Fail(
+                "Decompilation failed",
+                output,
+                ParseDecompilerSuggestions(output));
+        }
 
         return Result<DecompileResult>.Ok(new DecompileResult
         {

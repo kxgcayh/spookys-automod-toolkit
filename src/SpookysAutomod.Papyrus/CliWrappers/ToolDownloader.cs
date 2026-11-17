@@ -107,6 +107,13 @@ public class ToolDownloader
             {
                 ZipFile.ExtractToDirectory(downloadPath, targetDir, overwriteFiles: true);
             }
+            else if (asset.Name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) ||
+                     asset.Name.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+            {
+                // macOS/Linux builds; TarFile keeps the executable bit and refuses entries outside targetDir.
+                await using var gz = new GZipStream(File.OpenRead(downloadPath), CompressionMode.Decompress);
+                await System.Formats.Tar.TarFile.ExtractToDirectoryAsync(gz, targetDir, overwriteFiles: true);
+            }
             else
             {
                 // Single executable
@@ -143,6 +150,31 @@ public class ToolDownloader
             return true;
         }
         return name.Equals(pattern, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// First existing file named one of <paramref name="names"/> in a PATH directory, or null.
+    /// </summary>
+    public static string? FindOnPath(params string[] names)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path)) return null;
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var name in names)
+            {
+                try
+                {
+                    var candidate = Path.Combine(dir, name);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch (ArgumentException)
+                {
+                    // Malformed PATH entry
+                }
+            }
+        }
+        return null;
     }
 
     /// <summary>

@@ -25,12 +25,43 @@ public class PapyrusCompilerWrapper : ICliWrapper
         _downloader = new ToolDownloader(logger, toolsDir);
     }
 
+    /// <summary>
+    /// Which compiler a path is, by file name: the three take different arguments.
+    /// </summary>
+    public enum CompilerKind { Bethesda, Russo, Caprica }
+
+    public static CompilerKind KindOf(string compilerPath)
+    {
+        var name = Path.GetFileNameWithoutExtension(compilerPath);
+        if (name.StartsWith("caprica", StringComparison.OrdinalIgnoreCase)) return CompilerKind.Caprica;
+        if (name.Equals("PapyrusCompiler", StringComparison.OrdinalIgnoreCase)) return CompilerKind.Bethesda;
+        return CompilerKind.Russo;
+    }
+
     public string GetToolPath()
     {
         if (_executablePath != null && File.Exists(_executablePath))
             return _executablePath;
 
         var toolDir = Path.Combine(_downloader.ToolsDirectory, "papyrus-compiler");
+
+        // macOS/Linux: the Windows compilers cannot run. Prefer Caprica (tools folder, then PATH),
+        // then russo-2025's native build as `papyrus download` installs it.
+        if (!OperatingSystem.IsWindows())
+        {
+            var native = new[]
+            {
+                Path.Combine(toolDir, "caprica"),
+                ToolDownloader.FindOnPath("caprica", "Caprica"),
+                Path.Combine(toolDir, "papyrus-compiler", "papyrus"),
+            }.FirstOrDefault(p => p != null && File.Exists(p));
+
+            if (native != null)
+            {
+                _executablePath = native;
+                return native;
+            }
+        }
 
         // PREFER Original Bethesda compiler (works better than russo for complex mods)
         var originalCompiler = Path.Combine(toolDir, "papyrus-compiler", "Original Compiler", "PapyrusCompiler.exe");
@@ -91,6 +122,21 @@ public class PapyrusCompilerWrapper : ICliWrapper
         return flagsInOriginal; // Return expected path
     }
 
+    /// <summary>
+    /// The flags file from the toolkit's usual places, else from an import folder: the Creation Kit
+    /// installs TESV_Papyrus_Flags.flg next to the vanilla sources in Data/Scripts/Source.
+    /// </summary>
+    private string? FindFlagsFile(IEnumerable<string> imports)
+    {
+        var flagsFile = GetFlagsFilePath();
+        if (File.Exists(flagsFile))
+            return flagsFile;
+
+        return imports
+            .Select(dir => Path.Combine(Path.GetFullPath(dir), "TESV_Papyrus_Flags.flg"))
+            .FirstOrDefault(File.Exists);
+    }
+
     public bool IsAvailable()
     {
         var path = GetToolPath();
@@ -109,19 +155,27 @@ public class PapyrusCompilerWrapper : ICliWrapper
                 }));
         }
 
-        var compilerName = GetToolPath().Contains("PapyrusCompiler.exe")
-            ? "Bethesda Papyrus Compiler"
-            : "russo-2025 Papyrus Compiler";
+        var compilerName = KindOf(GetToolPath()) switch
+        {
+            CompilerKind.Bethesda => "Bethesda Papyrus Compiler",
+            CompilerKind.Caprica => "Caprica Papyrus Compiler",
+            _ => "russo-2025 Papyrus Compiler"
+        };
 
         return Task.FromResult(Result<string>.Ok(compilerName));
     }
 
     public async Task<Result> DownloadAsync()
     {
+        // russo-2025 publishes one archive per platform (the macOS build is arm64).
+        var asset = OperatingSystem.IsWindows() ? "papyrus-compiler-windows.zip"
+            : OperatingSystem.IsMacOS() ? "papyrus-compiler-macos.tar.gz"
+            : "papyrus-compiler-ubuntu.tar.gz";
+
         var result = await _downloader.DownloadFromGitHubAsync(
             "russo-2025",
             "papyrus-compiler",
-            "papyrus-compiler-windows.zip",  // Windows build (tar.gz for other platforms)
+            asset,
             "papyrus-compiler");
 
         return result.Success
@@ -187,14 +241,48 @@ public class PapyrusCompilerWrapper : ICliWrapper
             imports.Insert(0, source);
 
         var compilerPath = GetToolPath();
-        var isOriginalCompiler = compilerPath.Contains("PapyrusCompiler.exe");
+        var kind = KindOf(compilerPath);
+        var isOriginalCompiler = kind == CompilerKind.Bethesda;
+        string? workingDir = null;
 
         // Build arguments based on compiler type
         var args = new StringBuilder();
-        args.Append($"\"{source}\"");
 
-        if (isOriginalCompiler)
+        if (kind == CompilerKind.Caprica)
         {
+            // Caprica must run from the script's folder with a bare file name: given a path, it
+            // treats the folders as a namespace and fails ("Invalid namespacing on Skyrim script").
+            // Paths are made absolute because the working directory changes.
+            var fullSource = Path.GetFullPath(source);
+            if (Directory.Exists(fullSource))
+            {
+                workingDir = fullSource;
+                args.Append("\".\"");
+            }
+            else
+            {
+                workingDir = Path.GetDirectoryName(fullSource);
+                args.Append($"\"{Path.GetFileName(fullSource)}\"");
+            }
+
+            args.Append(" --game skyrim");
+            args.Append($" -o \"{Path.GetFullPath(outputDir)}\"");
+
+            foreach (var import in imports)
+            {
+                args.Append($" -i \"{Path.GetFullPath(import)}\"");
+            }
+
+            var flagsFile = FindFlagsFile(imports);
+            if (flagsFile != null)
+                args.Append($" -f \"{flagsFile}\"");
+
+            // No -O: Caprica supports optimization for Fallout 4 only and warns on every Skyrim compile.
+        }
+        else if (isOriginalCompiler)
+        {
+            args.Append($"\"{source}\"");
+
             // Bethesda Original Compiler syntax
             args.Append($" -output=\"{outputDir}\"");
 
@@ -205,8 +293,8 @@ public class PapyrusCompilerWrapper : ICliWrapper
             }
 
             // Add flags file
-            var flagsFile = GetFlagsFilePath();
-            if (File.Exists(flagsFile))
+            var flagsFile = FindFlagsFile(imports);
+            if (flagsFile != null)
                 args.Append($" -flags=\"{flagsFile}\"");
 
             if (optimize)
@@ -215,6 +303,7 @@ public class PapyrusCompilerWrapper : ICliWrapper
         else
         {
             // russo-2025 compiler syntax
+            args.Append($"\"{source}\"");
             args.Append($" -o \"{outputDir}\"");
 
             foreach (var import in imports)
@@ -227,10 +316,10 @@ public class PapyrusCompilerWrapper : ICliWrapper
         }
 
         _logger.Info($"Compiling: {Path.GetFileName(source)}");
-        _logger.Debug($"Compiler: {(isOriginalCompiler ? "Bethesda Original" : "russo-2025")}");
+        _logger.Debug($"Compiler: {kind}");
         _logger.Debug($"Import dirs: {string.Join(", ", imports)}");
 
-        var result = await RunAsync(args.ToString(), timeoutMs: 120000);
+        var result = await RunAsync(args.ToString(), timeoutMs: 120000, workingDir);
 
         if (!result.Success)
         {
@@ -243,9 +332,9 @@ public class PapyrusCompilerWrapper : ICliWrapper
 
         // Parse output
         var output = result.Value ?? "";
-        var compiled = CountCompiledScripts(output);
-        var errors = ParseErrors(output);
-        var warnings = ParseWarnings(output);
+        var compiled = kind == CompilerKind.Caprica ? CountCapricaCompiled(output) : CountCompiledScripts(output);
+        var errors = kind == CompilerKind.Caprica ? ParseCapricaLines(output, "Error") : ParseErrors(output);
+        var warnings = kind == CompilerKind.Caprica ? ParseCapricaLines(output, "Warning") : ParseWarnings(output);
 
         var success = errors.Count == 0;
 
@@ -260,7 +349,7 @@ public class PapyrusCompilerWrapper : ICliWrapper
         });
     }
 
-    private async Task<Result<string>> RunAsync(string arguments, int timeoutMs = 60000)
+    private async Task<Result<string>> RunAsync(string arguments, int timeoutMs = 60000, string? workingDir = null)
     {
         var path = GetToolPath();
 
@@ -273,6 +362,8 @@ public class PapyrusCompilerWrapper : ICliWrapper
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        if (workingDir != null)
+            psi.WorkingDirectory = workingDir;
 
         using var process = new Process { StartInfo = psi };
         var output = new StringBuilder();
@@ -319,6 +410,20 @@ public class PapyrusCompilerWrapper : ICliWrapper
 
         var suggestions = new List<string>();
 
+        // Caprica: no flags file passed or found
+        if (output.Contains("Unable to locate flags file", StringComparison.OrdinalIgnoreCase))
+        {
+            suggestions.Add("Caprica needs TESV_Papyrus_Flags.flg (installed with the Creation Kit)");
+            suggestions.Add("Copy it to skyrim-script-headers/TESV_Papyrus_Flags.flg");
+        }
+
+        // Caprica: a referenced script is missing from the imports
+        if (output.Contains("Unable to resolve type", StringComparison.OrdinalIgnoreCase))
+        {
+            suggestions.Add("A script this one uses is not in any import folder");
+            suggestions.Add("Run 'papyrus setup-headers --skyrim-path <game folder>' or pass --headers");
+        }
+
         // Unknown user flag errors
         if (output.Contains("Unknown user flag", StringComparison.OrdinalIgnoreCase))
         {
@@ -356,7 +461,8 @@ public class PapyrusCompilerWrapper : ICliWrapper
 
         // Syntax errors
         if (output.Contains("syntax error", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("parse error", StringComparison.OrdinalIgnoreCase))
+            output.Contains("parse error", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Unexpected token", StringComparison.OrdinalIgnoreCase))
         {
             suggestions.Add("Review the script for syntax errors");
         }
@@ -375,6 +481,30 @@ public class PapyrusCompilerWrapper : ICliWrapper
         }
 
         return suggestions;
+    }
+
+    /// <summary>
+    /// Caprica prints "Compiling N files..." once, then "Compiling Name.psc" per script.
+    /// </summary>
+    private static int CountCapricaCompiled(string output)
+    {
+        return output.Split('\n')
+            .Select(l => l.Trim())
+            .Count(l => l.StartsWith("Compiling ", StringComparison.Ordinal) &&
+                        l.EndsWith(".psc", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Caprica diagnostics: "File.psc (line, col): Error: ...", "Fatal Error: ...", "Warning W1234: ...".
+    /// </summary>
+    private static List<string> ParseCapricaLines(string output, string level)
+    {
+        return output.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Contains($"{level}:", StringComparison.Ordinal) ||
+                        l.Contains($"{level} W", StringComparison.Ordinal))
+            .Distinct()
+            .ToList();
     }
 
     private static int CountCompiledScripts(string output)
