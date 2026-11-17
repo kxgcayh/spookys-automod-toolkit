@@ -46,6 +46,19 @@ public class NifToolWrapper
     public string GetToolPath()
     {
         if (_toolPath != null) return _toolPath;
+
+        // On macOS/Linux prefer the native build (native/nif-tool, installed as tools/nif-tool/nif-tool);
+        // nif-tool.exe stays the Windows binary, or whatever stand-in was placed at that name.
+        if (!OperatingSystem.IsWindows())
+        {
+            var native = Path.Combine(_toolsDir, "nif-tool");
+            if (File.Exists(native))
+            {
+                _toolPath = native;
+                return _toolPath;
+            }
+        }
+
         _toolPath = Path.Combine(_toolsDir, "nif-tool.exe");
         return _toolPath;
     }
@@ -112,11 +125,17 @@ public class NifToolWrapper
             return Result<string>.Fail(
                 "nif-tool not found",
                 $"Expected at: {toolPath}",
-                new List<string>
-                {
-                    "Place nif-tool.exe in tools/nif-tool/",
-                    "nif-tool is a separate Rust binary for NIF manipulation"
-                });
+                OperatingSystem.IsWindows()
+                    ? new List<string>
+                    {
+                        "Place nif-tool.exe in tools/nif-tool/",
+                        "nif-tool is a separate Rust binary for NIF manipulation"
+                    }
+                    : new List<string>
+                    {
+                        "Build the native nif-tool: cargo build --release --manifest-path native/nif-tool/Cargo.toml",
+                        "Then copy native/nif-tool/target/release/nif-tool to tools/nif-tool/nif-tool"
+                    });
         }
 
         var psi = new ProcessStartInfo
