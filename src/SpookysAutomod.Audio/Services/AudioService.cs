@@ -184,14 +184,17 @@ public class AudioService
         }
 
         // xWMAEncode is a Microsoft tool from DirectX SDK
-        // For now, return a stub with suggestions
+        // For now, return a stub with suggestions.
+        // ffmpeg is not an alternative: its WMAv2 encoder writes one frame per packet with no bit
+        // reservoir, while xWMA packets are fixed-size superframes that carry frames across packet
+        // boundaries; wrapped in an XWMA container, ffmpeg's own xWMA reader cannot decode the result.
         return Result<string>.Fail(
             "WAV to XWM conversion requires xWMAEncode.exe",
             suggestions: new List<string>
             {
                 "Download xWMAEncode from Microsoft DirectX SDK",
-                "Use ffmpeg or other audio tools to convert to XWM format",
-                "Place xWMAEncode.exe in the tools directory"
+                "Place xWMAEncode.exe in the tools directory",
+                "xWMAEncode is Windows-only; no open-source encoder writes xWMA"
             });
     }
 
