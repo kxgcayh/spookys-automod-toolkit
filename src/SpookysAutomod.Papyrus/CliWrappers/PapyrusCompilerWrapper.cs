@@ -302,17 +302,15 @@ public class PapyrusCompilerWrapper : ICliWrapper
         }
         else
         {
-            // russo-2025 compiler syntax
-            args.Append($"\"{source}\"");
+            // russo-2025 compiler syntax (README): papyrus compile -i <file|dir> -o <dir> -h <headers dir>.
+            // It has no optimize flag, and an unknown flag is an error.
+            args.Append($"compile -i \"{source}\"");
             args.Append($" -o \"{outputDir}\"");
 
             foreach (var import in imports)
             {
                 args.Append($" -h \"{import}\"");
             }
-
-            if (optimize)
-                args.Append(" -O");
         }
 
         _logger.Info($"Compiling: {Path.GetFileName(source)}");
@@ -332,7 +330,12 @@ public class PapyrusCompilerWrapper : ICliWrapper
 
         // Parse output
         var output = result.Value ?? "";
-        var compiled = kind == CompilerKind.Caprica ? CountCapricaCompiled(output) : CountCompiledScripts(output);
+        var compiled = kind switch
+        {
+            CompilerKind.Caprica => CountCapricaCompiled(output),
+            CompilerKind.Russo => CountRussoCompiled(output),
+            _ => CountCompiledScripts(output)
+        };
         var errors = kind == CompilerKind.Caprica ? ParseCapricaLines(output, "Error") : ParseErrors(output);
         var warnings = kind == CompilerKind.Caprica ? ParseCapricaLines(output, "Warning") : ParseWarnings(output);
 
@@ -462,7 +465,8 @@ public class PapyrusCompilerWrapper : ICliWrapper
         // Syntax errors
         if (output.Contains("syntax error", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("parse error", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Unexpected token", StringComparison.OrdinalIgnoreCase))
+            output.Contains("Unexpected token", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Parser error", StringComparison.OrdinalIgnoreCase))
         {
             suggestions.Add("Review the script for syntax errors");
         }
@@ -505,6 +509,15 @@ public class PapyrusCompilerWrapper : ICliWrapper
                         l.Contains($"{level} W", StringComparison.Ordinal))
             .Distinct()
             .ToList();
+    }
+
+    /// <summary>
+    /// russo-2025 prints "N files in total" (measured with the 2026.03.15 macOS build).
+    /// </summary>
+    private static int CountRussoCompiled(string output)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(output, @"(\d+) files in total");
+        return m.Success ? int.Parse(m.Groups[1].Value) : CountCompiledScripts(output);
     }
 
     private static int CountCompiledScripts(string output)
