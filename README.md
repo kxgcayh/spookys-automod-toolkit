@@ -25,10 +25,41 @@ Create new mods, inspect existing ones, edit archives, decompile scripts, view r
 
 ---
 
+## About this fork
+
+This is a fork of [SpookyPirate/spookys-automod-toolkit](https://github.com/SpookyPirate/spookys-automod-toolkit)
+v1.11.2 that runs the CLI on **macOS and Linux without Wine**. Everything else is upstream's.
+
+| Module | Windows | macOS / Linux in this fork |
+| --- | --- | --- |
+| `esp`, `mcm`, `audio` (except `wav-to-xwm`), `nif info` | as upstream | as upstream (managed code) |
+| `nif` (list-textures, replace-textures, list-strings, rename-strings, shader-info, fix-eyes, verify, restore) | `tools/nif-tool/nif-tool.exe` | native nif-tool, built from `native/nif-tool` (Rust) |
+| `papyrus compile` | Bethesda compiler or russo-2025 | [Caprica](https://github.com/kxgcayh/Caprica) on PATH, else russo-2025's native build (`papyrus download`) |
+| `papyrus decompile` | Champollion | [Champollion](https://github.com/kxgcayh/Champollion) on PATH |
+| `archive` | BSArch | needs a native BSArch stand-in placed at the same path |
+| `audio wav-to-xwm` | needs `xWMAEncode.exe` | not available (no encoder writes playable xWMA here) |
+| `skse`, Setup wizard | as upstream | not supported (MSVC / WPF) |
+
+What changed:
+
+- **`native/nif-tool`**: a Rust reimplementation of ColdSun's nif-tool with the same commands, flags and output.
+  Checked against the Windows binary on 22,047 vanilla and 2,839 mod NIFs: byte-identical output and written files.
+  One deliberate difference: a string table holding invalid UTF-8 (6 vanilla meshes) passes `verify` and keeps its
+  bytes on a write; the Windows build fails it and writes U+FFFD over those bytes.
+- **Papyrus wrappers**: Caprica is run the way it needs (from the script's folder, one `-i` per import, no `-O`);
+  `TESV_Papyrus_Flags.flg` is also found in the `--headers` folder; Champollion and Caprica are found on PATH;
+  a failed decompile is reported as a failure (Champollion exits 0).
+- **russo-2025 compiler**: called with its real syntax (`compile -i <src> -o <dir> -h <dir>`) on every platform,
+  and `papyrus download` fetches its macOS/Linux build.
+
+---
+
 ## Requirements
 
-- **Windows**
+- **Windows**, or **macOS / Linux** (see *About this fork*)
 - **.NET 8.0 SDK** - [Download](https://dotnet.microsoft.com/download/dotnet/8.0)
+- **macOS / Linux only**: Rust (`cargo`, [rustup.rs](https://rustup.rs)) for the native nif-tool; Caprica and
+  Champollion built from the forks above for `papyrus`
 - **Skyrim Special Edition** (for testing)
 
 ---
@@ -62,6 +93,22 @@ dotnet build SpookysAutomod.sln
 > dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
 > ```
 > Then run `dotnet build SpookysAutomod.sln` again.
+
+**Option C: macOS / Linux (this fork)**
+
+```bash
+git clone https://github.com/kxgcayh/spookys-automod-toolkit.git
+cd spookys-automod-toolkit
+dotnet build src/SpookysAutomod.Cli -c Release          # the WPF Setup project is Windows-only
+cargo build --release --manifest-path native/nif-tool/Cargo.toml
+mkdir -p tools/nif-tool && cp native/nif-tool/target/release/nif-tool tools/nif-tool/nif-tool
+```
+
+For `papyrus`, put `caprica` and `champollion` on PATH (build them from
+[kxgcayh/Caprica](https://github.com/kxgcayh/Caprica) and [kxgcayh/Champollion](https://github.com/kxgcayh/Champollion)),
+or run `papyrus download` for russo-2025's native compiler. Caprica needs `TESV_Papyrus_Flags.flg` from the
+Creation Kit, in `skyrim-script-headers/` or the `--headers` folder. `papyrus setup-headers` cannot auto-detect the
+game off Windows: pass `--skyrim-path`.
 
 **Verify:**
 
@@ -723,10 +770,10 @@ skse add-function "./ProjectFolder" --name "FuncName" --return "Int" --param "Ac
 
 | Tool             | Purpose           | Auto-Download                                                        |
 | ---------------- | ----------------- | -------------------------------------------------------------------- |
-| papyrus-compiler | Compile scripts   | Yes                                                                  |
-| Champollion      | Decompile scripts | Yes                                                                  |
+| papyrus-compiler | Compile scripts   | Yes (macOS/Linux: russo-2025's native build; Caprica on PATH is preferred) |
+| Champollion      | Decompile scripts | Yes (macOS/Linux: no, build it and put `champollion` on PATH)       |
 | BSArch           | Create archives   | No - [Get from xEdit](https://github.com/TES5Edit/TES5Edit/releases) |
-| nif-tool         | NIF mesh editing  | Bundled in `tools/nif-tool/` |
+| nif-tool         | NIF mesh editing  | Windows: bundled in `tools/nif-tool/`; macOS/Linux: build `native/nif-tool` |
 
 ---
 
@@ -768,6 +815,7 @@ Then run `dotnet restore SpookysAutomod.sln` and `dotnet build SpookysAutomod.sl
 ## Contributors
 
 - **ColdSun** — nif-tool (Rust CLI for NIF mesh editing)
+- **kxgcayh** — this fork: native nif-tool reimplementation (`native/nif-tool`) and macOS/Linux Papyrus support
 
 ---
 
